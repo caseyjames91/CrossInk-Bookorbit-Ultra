@@ -1,5 +1,6 @@
-#include "../../src/components/BookOrbitCoverCacheKey.h"
 #include <cassert>
+
+#include "../../src/components/BookOrbitCoverCacheKey.h"
 int main() {
   using bookorbit_cover::cacheFilename;
   assert(cacheFilename(0, "v1").empty());
@@ -7,5 +8,5 @@ int main() {
   assert(cacheFilename(123, "v1") == cacheFilename(123, "v1"));
   assert(cacheFilename(123, "v1") != cacheFilename(123, "v2"));
   assert(cacheFilename(123, "v1") != cacheFilename(124, "v1"));
-  assert(cacheFilename(123, "../weird/path") .find('/') == std::string::npos);
+  assert(cacheFilename(123, "../weird/path").find('/') == std::string::npos);
 }

@@ -26,9 +26,7 @@ inline int columnWidth(int screenWidth, const Layout& l) {
 inline int coverHeight(int screenWidth, const Layout& l) {
   return columnWidth(screenWidth, l) * l.coverRatioHeight / l.coverRatioWidth;
 }
-inline int rowHeight(int screenWidth, const Layout& l) {
-  return coverHeight(screenWidth, l) + l.titleHeight + l.gap;
-}
+inline int rowHeight(int screenWidth, const Layout& l) { return coverHeight(screenWidth, l) + l.titleHeight + l.gap; }
 inline int visibleRows(int screenWidth, int screenHeight, const Layout& l) {
   return std::max(1, (screenHeight - l.top - l.bottom + l.gap) / rowHeight(screenWidth, l));
 }
@@ -45,11 +43,20 @@ inline int moveSelection(int selected, int direction, int count, const Layout& l
   const int current = std::clamp(selected, 0, count - 1);
   int target = current;
   switch (direction) {
-    case 0: target = current - cols; break;  // up
-    case 1: target = current + cols; break;  // down
-    case 2: target = current - 1; break;     // left
-    case 3: target = current + 1; break;     // right
-    default: break;
+    case 0:
+      target = current - cols;
+      break;  // up
+    case 1:
+      target = current + cols;
+      break;  // down
+    case 2:
+      target = current - 1;
+      break;  // left
+    case 3:
+      target = current + 1;
+      break;  // right
+    default:
+      break;
   }
   return std::clamp(target, 0, count - 1);
 }
@@ -68,17 +75,17 @@ inline int hitTest(int x, int y, int count, int screenWidth, const Layout& l) {
   const int col = (x - l.left) / strideX;
   const int row = (y - l.top) / strideY;
   if (col < 0 || col >= std::max(1, l.columns) || (x - l.left) % strideX >= w ||
-      (y - l.top) % strideY >= coverHeight(screenWidth, l) + l.titleHeight) return -1;
+      (y - l.top) % strideY >= coverHeight(screenWidth, l) + l.titleHeight)
+    return -1;
   const int index = row * std::max(1, l.columns) + col;
   return index < count ? index : -1;
 }
 // Converts a touch coordinate on a paginated grid to an absolute catalog index.
-inline int hitTestPage(int x, int y, int start, int count, int screenWidth,
-                       int screenHeight, const Layout& l) {
+inline int hitTestPage(int x, int y, int start, int count, int screenWidth, int screenHeight, const Layout& l) {
   if (start < 0 || start >= count || y >= screenHeight - l.bottom) return -1;
   const int remaining = std::max(0, count - start);
   const int visible = std::min(remaining, pageSize(screenWidth, screenHeight, l));
   const int local = hitTest(x, y, visible, screenWidth, l);
   return local < 0 ? -1 : start + local;
 }
-} // namespace bookorbit_grid
+}  // namespace bookorbit_grid

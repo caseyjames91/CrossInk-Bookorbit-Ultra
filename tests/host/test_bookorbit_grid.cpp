@@ -1,5 +1,6 @@
-#include "../../src/components/BookOrbitGridLayout.h"
 #include <cassert>
+
+#include "../../src/components/BookOrbitGridLayout.h"
 int main() {
   bookorbit_grid::Layout l;
   assert(bookorbit_grid::columnWidth(480, l) > 0);
