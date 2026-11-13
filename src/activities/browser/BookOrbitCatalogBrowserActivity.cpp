@@ -732,6 +732,7 @@ bool BookOrbitCatalogBrowserActivity::loadBooks(const BookOrbitBookQuery& query,
     Entry& entry = entries[first + i];
     entry.type = EntryType::BOOK;
     entry.bookId = book.id;
+    entry.coverRevision = std::move(book.coverRevision);
     entry.onDevice = bookOnDevice(book.id, book.title, book.author, entry.path);
     entry.title = std::move(book.title);
     entry.subtitle = std::move(book.author);

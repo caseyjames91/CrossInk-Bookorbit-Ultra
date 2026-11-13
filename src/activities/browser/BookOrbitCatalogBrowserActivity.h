@@ -44,6 +44,7 @@ class BookOrbitCatalogBrowserActivity final : public Activity {
     std::string seriesId;  // numeric series id, for FACET entries of the series facet
     std::string path;      // SD path: LOCAL_BOOK entries, and BOOK entries already on the device
     int64_t bookId = 0;
+    std::string coverRevision;  // available to the future grid thumbnail loader
     bool onDevice = false;  // BOOK entries: a matching file already exists on the device (at `path`)
     uint16_t page = 0;      // server page the row came from; 0 for the root and the on-device lists
     // Length of `title` before its " (count)" badge, 0 when it has none. A listing opened

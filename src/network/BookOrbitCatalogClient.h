@@ -34,6 +34,8 @@ struct BookOrbitCatalogBook {
   int64_t id = 0;
   std::string title;
   std::string author;  // first author only, for compact list display
+  // Server metadata revision, for future SD thumbnail cache invalidation.
+  std::string coverRevision;
   // What the listing's sort groups the book by, fetched only for the sort that needs it:
   // the series name under the series sort, and when it was added (UTC epoch seconds, 0
   // unknown) under the date-added sort.
@@ -84,6 +86,11 @@ struct BookOrbitBookDetail {
   int64_t id = 0;
   std::string title;
   std::string author;
+  // Optional fields for the native BookOrbit book-details dashboard.
+  // Empty values indicate an older server or absent metadata.
+  std::string description;
+  std::string series;
+  std::string readStatus;
   std::vector<BookOrbitCatalogFile> files;
 };
 

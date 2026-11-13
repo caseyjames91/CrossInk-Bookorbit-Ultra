@@ -234,6 +234,7 @@ bool loadBooksPage(const BookOrbitBookQuery& query, const int page, BookOrbitBoo
     book.id = item["id"] | 0;
     book.title = std::string(item["title"] | "");
     book.author = std::string(item["author"] | "");
+    book.coverRevision = std::string(item["coverRevision"] | "");
     book.series = std::string(item["series"] | "");
     book.addedAt = item["addedAt"] | 0u;
     outPage.books.push_back(std::move(book));
@@ -260,6 +261,10 @@ void saveBooksPage(const BookOrbitBookQuery& query, const int page, const BookOr
     appendJsonEscaped(json, pageData.books[i].title);
     json += ",\"author\":";
     appendJsonEscaped(json, pageData.books[i].author);
+    if (!pageData.books[i].coverRevision.empty()) {
+      json += ",\"coverRevision\":";
+      appendJsonEscaped(json, pageData.books[i].coverRevision);
+    }
     // Only what the listing's sort fetched: see BookOrbitCatalogClient::fetchBooks.
     if (!pageData.books[i].series.empty()) {
       json += ",\"series\":";

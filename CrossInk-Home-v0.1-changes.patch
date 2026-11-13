@@ -1,0 +1,304 @@
+diff --git a/CROSSINK_HOME_PROGRESS.md b/CROSSINK_HOME_PROGRESS.md
+new file mode 100644
+index 0000000..f4318dc
+--- /dev/null
++++ b/CROSSINK_HOME_PROGRESS.md
+@@ -0,0 +1,18 @@
++# CrossInk Home v0.1 — development status
++
++This source snapshot is **not flashable**. It contains the earlier metadata/grid foundation plus a grid touch-safety correction.
++
++## Verified this pass
++- Inspected `BookOrbitCatalogBrowserActivity::buildListScreen` and `render`.
++- Confirmed the catalog still renders through `FreeInkApp` list rows; the grid geometry is not yet connected to the catalog renderer or touch router.
++- Hardened `BookOrbitGridLayout::hitTestPage`: reject touches in the bottom button-hint band and invalid page offsets, rather than allowing those touches to activate a book.
++- Added regression assertions and passed `g++ -std=c++17 -Wall -Wextra -Werror tests/host/test_bookorbit_grid.cpp`.
++
++## Next required integration
++1. Add grid/list display mode to catalog state and options.
++2. Render actual book cards with cover bitmaps and title/author from catalog entries.
++3. Register grid card hit areas with the same UI interaction system as the list; don't draw a grid over existing list touch targets.
++4. Adapt button navigation and pagination to visible grid cells, including server paging.
++5. Build a Book Details activity, then run the full PlatformIO X4 Pro build.
++
++The cover revision field is metadata only. It does not by itself download or render covers.
+diff --git a/src/activities/browser/BookOrbitCatalogBrowserActivity.cpp b/src/activities/browser/BookOrbitCatalogBrowserActivity.cpp
+index ad9e95a..35c8d49 100644
+--- a/src/activities/browser/BookOrbitCatalogBrowserActivity.cpp
++++ b/src/activities/browser/BookOrbitCatalogBrowserActivity.cpp
+@@ -732,6 +732,7 @@ bool BookOrbitCatalogBrowserActivity::loadBooks(const BookOrbitBookQuery& query,
+     Entry& entry = entries[first + i];
+     entry.type = EntryType::BOOK;
+     entry.bookId = book.id;
++    entry.coverRevision = std::move(book.coverRevision);
+     entry.onDevice = bookOnDevice(book.id, book.title, book.author, entry.path);
+     entry.title = std::move(book.title);
+     entry.subtitle = std::move(book.author);
+diff --git a/src/activities/browser/BookOrbitCatalogBrowserActivity.h b/src/activities/browser/BookOrbitCatalogBrowserActivity.h
+index 5a999e6..9a059fc 100644
+--- a/src/activities/browser/BookOrbitCatalogBrowserActivity.h
++++ b/src/activities/browser/BookOrbitCatalogBrowserActivity.h
+@@ -44,6 +44,7 @@ class BookOrbitCatalogBrowserActivity final : public Activity {
+     std::string seriesId;  // numeric series id, for FACET entries of the series facet
+     std::string path;      // SD path: LOCAL_BOOK entries, and BOOK entries already on the device
+     int64_t bookId = 0;
++    std::string coverRevision;  // available to the future grid thumbnail loader
+     bool onDevice = false;  // BOOK entries: a matching file already exists on the device (at `path`)
+     uint16_t page = 0;      // server page the row came from; 0 for the root and the on-device lists
+     // Length of `title` before its " (count)" badge, 0 when it has none. A listing opened
+diff --git a/src/activities/browser/BookOrbitCatalogListCache.cpp b/src/activities/browser/BookOrbitCatalogListCache.cpp
+index 909aedd..8c72df0 100644
+--- a/src/activities/browser/BookOrbitCatalogListCache.cpp
++++ b/src/activities/browser/BookOrbitCatalogListCache.cpp
+@@ -234,6 +234,7 @@ bool loadBooksPage(const BookOrbitBookQuery& query, const int page, BookOrbitBoo
+     book.id = item["id"] | 0;
+     book.title = std::string(item["title"] | "");
+     book.author = std::string(item["author"] | "");
++    book.coverRevision = std::string(item["coverRevision"] | "");
+     book.series = std::string(item["series"] | "");
+     book.addedAt = item["addedAt"] | 0u;
+     outPage.books.push_back(std::move(book));
+@@ -260,6 +261,10 @@ void saveBooksPage(const BookOrbitBookQuery& query, const int page, const BookOr
+     appendJsonEscaped(json, pageData.books[i].title);
+     json += ",\"author\":";
+     appendJsonEscaped(json, pageData.books[i].author);
++    if (!pageData.books[i].coverRevision.empty()) {
++      json += ",\"coverRevision\":";
++      appendJsonEscaped(json, pageData.books[i].coverRevision);
++    }
+     // Only what the listing's sort fetched: see BookOrbitCatalogClient::fetchBooks.
+     if (!pageData.books[i].series.empty()) {
+       json += ",\"series\":";
+diff --git a/src/components/BookOrbitCoverCacheKey.h b/src/components/BookOrbitCoverCacheKey.h
+new file mode 100644
+index 0000000..6f1faef
+--- /dev/null
++++ b/src/components/BookOrbitCoverCacheKey.h
+@@ -0,0 +1,26 @@
++#pragma once
++// Stable, filesystem-safe identifiers for cached BookOrbit cover thumbnails.
++// No dependency on the display or network stack; usable in host tests.
++#include <cstdint>
++#include <cstdio>
++#include <string>
++#include <string_view>
++
++namespace bookorbit_cover {
++inline uint32_t revisionHash(std::string_view revision) {
++  uint32_t hash = 2166136261u; // FNV-1a
++  for (unsigned char c : revision) {
++    hash ^= c;
++    hash *= 16777619u;
++  }
++  return hash;
++}
++inline std::string cacheFilename(int64_t bookId, std::string_view revision) {
++  if (bookId <= 0) return {};
++  char filename[48];
++  std::snprintf(filename, sizeof(filename), "%lld-%08lx.bin",
++                static_cast<long long>(bookId),
++                static_cast<unsigned long>(revisionHash(revision)));
++  return filename;
++}
++} // namespace bookorbit_cover
+diff --git a/src/components/BookOrbitGridLayout.h b/src/components/BookOrbitGridLayout.h
+new file mode 100644
+index 0000000..59273b4
+--- /dev/null
++++ b/src/components/BookOrbitGridLayout.h
+@@ -0,0 +1,84 @@
++#pragma once
++
++// Pure layout math for the BookOrbit cover-grid browser. No network, heap or
++// display dependencies: safe to use from both the renderer and touch router.
++#include <algorithm>
++
++namespace bookorbit_grid {
++struct Cell {
++  int x, y, width, height;
++};
++struct Layout {
++  int columns = 3;
++  int gap = 10;
++  int left = 12;
++  int top = 52;
++  int right = 12;
++  int bottom = 35;
++  int titleHeight = 38;
++  int coverRatioWidth = 2;
++  int coverRatioHeight = 3;
++};
++inline int columnWidth(int screenWidth, const Layout& l) {
++  const int cols = std::max(1, l.columns);
++  return std::max(1, (screenWidth - l.left - l.right - (cols - 1) * l.gap) / cols);
++}
++inline int coverHeight(int screenWidth, const Layout& l) {
++  return columnWidth(screenWidth, l) * l.coverRatioHeight / l.coverRatioWidth;
++}
++inline int rowHeight(int screenWidth, const Layout& l) {
++  return coverHeight(screenWidth, l) + l.titleHeight + l.gap;
++}
++inline int visibleRows(int screenWidth, int screenHeight, const Layout& l) {
++  return std::max(1, (screenHeight - l.top - l.bottom + l.gap) / rowHeight(screenWidth, l));
++}
++inline int pageSize(int screenWidth, int screenHeight, const Layout& l) {
++  return std::max(1, l.columns) * visibleRows(screenWidth, screenHeight, l);
++}
++inline int pageStart(int selected, int screenWidth, int screenHeight, const Layout& l) {
++  const int size = pageSize(screenWidth, screenHeight, l);
++  return std::max(0, selected) / size * size;
++}
++inline int moveSelection(int selected, int direction, int count, const Layout& l) {
++  if (count <= 0) return -1;
++  const int cols = std::max(1, l.columns);
++  const int current = std::clamp(selected, 0, count - 1);
++  int target = current;
++  switch (direction) {
++    case 0: target = current - cols; break;  // up
++    case 1: target = current + cols; break;  // down
++    case 2: target = current - 1; break;     // left
++    case 3: target = current + 1; break;     // right
++    default: break;
++  }
++  return std::clamp(target, 0, count - 1);
++}
++inline Cell cell(int index, int screenWidth, const Layout& l) {
++  const int w = columnWidth(screenWidth, l);
++  return {l.left + (index % std::max(1, l.columns)) * (w + l.gap),
++          l.top + (index / std::max(1, l.columns)) * rowHeight(screenWidth, l), w,
++          coverHeight(screenWidth, l) + l.titleHeight};
++}
++inline int hitTest(int x, int y, int count, int screenWidth, const Layout& l) {
++  if (x < l.left || y < l.top || count <= 0) return -1;
++  const int w = columnWidth(screenWidth, l);
++  const int strideX = w + l.gap;
++  const int strideY = rowHeight(screenWidth, l);
++  if (strideX <= 0 || strideY <= 0) return -1;
++  const int col = (x - l.left) / strideX;
++  const int row = (y - l.top) / strideY;
++  if (col < 0 || col >= std::max(1, l.columns) || (x - l.left) % strideX >= w ||
++      (y - l.top) % strideY >= coverHeight(screenWidth, l) + l.titleHeight) return -1;
++  const int index = row * std::max(1, l.columns) + col;
++  return index < count ? index : -1;
++}
++// Converts a touch coordinate on a paginated grid to an absolute catalog index.
++inline int hitTestPage(int x, int y, int start, int count, int screenWidth,
++                       int screenHeight, const Layout& l) {
++  if (start < 0 || start >= count || y >= screenHeight - l.bottom) return -1;
++  const int remaining = std::max(0, count - start);
++  const int visible = std::min(remaining, pageSize(screenWidth, screenHeight, l));
++  const int local = hitTest(x, y, visible, screenWidth, l);
++  return local < 0 ? -1 : start + local;
++}
++} // namespace bookorbit_grid
+diff --git a/src/network/BookOrbitCatalogClient.cpp b/src/network/BookOrbitCatalogClient.cpp
+index db82561..0a027f3 100644
+--- a/src/network/BookOrbitCatalogClient.cpp
++++ b/src/network/BookOrbitCatalogClient.cpp
+@@ -260,6 +260,7 @@ BookOrbitCatalogBook bookFromItem(JsonObjectConst item) {
+   BookOrbitCatalogBook book;
+   book.id = item["id"] | 0;
+   book.title = std::string(item["title"] | "");
++  book.coverRevision = std::string(item["updatedAt"] | "");
+   JsonArrayConst authors = item["authors"].as<JsonArrayConst>();
+   if (!authors.isNull() && authors.size() > 0) {
+     book.author = std::string(authors[0].as<const char*>() ? authors[0].as<const char*>() : "");
+@@ -515,6 +516,7 @@ bool BookOrbitCatalogClient::fetchBooks(const BookOrbitBookQuery& query, const i
+   filter["items"][0]["id"] = true;
+   filter["items"][0]["title"] = true;
+   filter["items"][0]["authors"] = true;
++  filter["items"][0]["updatedAt"] = true;
+   // Only what the sort's list sections need: a series name per row costs heap.
+   if (bySeries) filter["items"][0]["seriesName"] = true;
+   if (byDateAdded) filter["items"][0]["addedAt"] = true;
+@@ -600,6 +602,10 @@ bool BookOrbitCatalogClient::fetchBookDetail(const int64_t bookId, BookOrbitBook
+   filter["id"] = true;
+   filter["title"] = true;
+   filter["authors"] = true;
++  // Keep the response filtered to fields needed by the details UI.
++  filter["description"] = true;
++  filter["seriesName"] = true;
++  filter["readStatus"] = true;
+   filter["files"][0]["id"] = true;
+   filter["files"][0]["format"] = true;
+   filter["files"][0]["sizeBytes"] = true;
+@@ -609,6 +615,9 @@ bool BookOrbitCatalogClient::fetchBookDetail(const int64_t bookId, BookOrbitBook
+ 
+   outDetail.id = doc["id"] | bookId;
+   outDetail.title = std::string(doc["title"] | "");
++  outDetail.description = std::string(doc["description"] | "");
++  outDetail.series = std::string(doc["seriesName"] | "");
++  outDetail.readStatus = std::string(doc["readStatus"] | "");
+   JsonArrayConst authors = doc["authors"].as<JsonArrayConst>();
+   if (!authors.isNull() && authors.size() > 0) {
+     outDetail.author = std::string(authors[0].as<const char*>() ? authors[0].as<const char*>() : "");
+diff --git a/src/network/BookOrbitCatalogClient.h b/src/network/BookOrbitCatalogClient.h
+index c78e38b..4440610 100644
+--- a/src/network/BookOrbitCatalogClient.h
++++ b/src/network/BookOrbitCatalogClient.h
+@@ -34,6 +34,8 @@ struct BookOrbitCatalogBook {
+   int64_t id = 0;
+   std::string title;
+   std::string author;  // first author only, for compact list display
++  // Server metadata revision, for future SD thumbnail cache invalidation.
++  std::string coverRevision;
+   // What the listing's sort groups the book by, fetched only for the sort that needs it:
+   // the series name under the series sort, and when it was added (UTC epoch seconds, 0
+   // unknown) under the date-added sort.
+@@ -84,6 +86,11 @@ struct BookOrbitBookDetail {
+   int64_t id = 0;
+   std::string title;
+   std::string author;
++  // Optional fields for the native BookOrbit book-details dashboard.
++  // Empty values indicate an older server or absent metadata.
++  std::string description;
++  std::string series;
++  std::string readStatus;
+   std::vector<BookOrbitCatalogFile> files;
+ };
+ 
+diff --git a/tests/host/test_bookorbit_cover_cache_key.cpp b/tests/host/test_bookorbit_cover_cache_key.cpp
+new file mode 100644
+index 0000000..8e61655
+--- /dev/null
++++ b/tests/host/test_bookorbit_cover_cache_key.cpp
+@@ -0,0 +1,11 @@
++#include "../../src/components/BookOrbitCoverCacheKey.h"
++#include <cassert>
++int main() {
++  using bookorbit_cover::cacheFilename;
++  assert(cacheFilename(0, "v1").empty());
++  assert(cacheFilename(-1, "v1").empty());
++  assert(cacheFilename(123, "v1") == cacheFilename(123, "v1"));
++  assert(cacheFilename(123, "v1") != cacheFilename(123, "v2"));
++  assert(cacheFilename(123, "v1") != cacheFilename(124, "v1"));
++  assert(cacheFilename(123, "../weird/path") .find('/') == std::string::npos);
++}
+diff --git a/tests/host/test_bookorbit_grid.cpp b/tests/host/test_bookorbit_grid.cpp
+new file mode 100644
+index 0000000..aec015b
+--- /dev/null
++++ b/tests/host/test_bookorbit_grid.cpp
+@@ -0,0 +1,22 @@
++#include "../../src/components/BookOrbitGridLayout.h"
++#include <cassert>
++int main() {
++  bookorbit_grid::Layout l;
++  assert(bookorbit_grid::columnWidth(480, l) > 0);
++  for (int i = 0; i < 6; ++i) {
++    auto c = bookorbit_grid::cell(i, 480, l);
++    assert(bookorbit_grid::hitTest(c.x + c.width / 2, c.y + c.height / 2, 6, 480, l) == i);
++  }
++  assert(bookorbit_grid::pageSize(480, 800, l) >= 3);
++  assert(bookorbit_grid::pageStart(0, 480, 800, l) == 0);
++  assert(bookorbit_grid::moveSelection(0, 1, 10, l) == 3);
++  assert(bookorbit_grid::moveSelection(9, 1, 10, l) == 9);
++  assert(bookorbit_grid::moveSelection(0, 0, 10, l) == 0);
++  auto first = bookorbit_grid::cell(0, 480, l);
++  assert(bookorbit_grid::hitTestPage(first.x + 5, first.y + 5, 6, 12, 480, 800, l) == 6);
++  assert(bookorbit_grid::hitTestPage(first.x + 5, first.y + 5, 12, 12, 480, 800, l) == -1);
++  assert(bookorbit_grid::hitTest(0, 0, 6, 480, l) == -1);
++  assert(bookorbit_grid::hitTest(470, 400, 6, 480, l) == -1);
++  assert(bookorbit_grid::hitTestPage(first.x + 5, 799, 0, 12, 480, 800, l) == -1);
++  assert(bookorbit_grid::hitTestPage(first.x + 5, first.y + 5, -1, 12, 480, 800, l) == -1);
++}

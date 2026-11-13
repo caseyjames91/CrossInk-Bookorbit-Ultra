@@ -260,6 +260,7 @@ BookOrbitCatalogBook bookFromItem(JsonObjectConst item) {
   BookOrbitCatalogBook book;
   book.id = item["id"] | 0;
   book.title = std::string(item["title"] | "");
+  book.coverRevision = std::string(item["updatedAt"] | "");
   JsonArrayConst authors = item["authors"].as<JsonArrayConst>();
   if (!authors.isNull() && authors.size() > 0) {
     book.author = std::string(authors[0].as<const char*>() ? authors[0].as<const char*>() : "");
@@ -515,6 +516,7 @@ bool BookOrbitCatalogClient::fetchBooks(const BookOrbitBookQuery& query, const i
   filter["items"][0]["id"] = true;
   filter["items"][0]["title"] = true;
   filter["items"][0]["authors"] = true;
+  filter["items"][0]["updatedAt"] = true;
   // Only what the sort's list sections need: a series name per row costs heap.
   if (bySeries) filter["items"][0]["seriesName"] = true;
   if (byDateAdded) filter["items"][0]["addedAt"] = true;
@@ -600,6 +602,10 @@ bool BookOrbitCatalogClient::fetchBookDetail(const int64_t bookId, BookOrbitBook
   filter["id"] = true;
   filter["title"] = true;
   filter["authors"] = true;
+  // Keep the response filtered to fields needed by the details UI.
+  filter["description"] = true;
+  filter["seriesName"] = true;
+  filter["readStatus"] = true;
   filter["files"][0]["id"] = true;
   filter["files"][0]["format"] = true;
   filter["files"][0]["sizeBytes"] = true;
@@ -609,6 +615,9 @@ bool BookOrbitCatalogClient::fetchBookDetail(const int64_t bookId, BookOrbitBook
 
   outDetail.id = doc["id"] | bookId;
   outDetail.title = std::string(doc["title"] | "");
+  outDetail.description = std::string(doc["description"] | "");
+  outDetail.series = std::string(doc["seriesName"] | "");
+  outDetail.readStatus = std::string(doc["readStatus"] | "");
   JsonArrayConst authors = doc["authors"].as<JsonArrayConst>();
   if (!authors.isNull() && authors.size() > 0) {
     outDetail.author = std::string(authors[0].as<const char*>() ? authors[0].as<const char*>() : "");
