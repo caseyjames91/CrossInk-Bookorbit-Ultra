@@ -33,6 +33,7 @@
 #include "activities/reader/BookReadingStats.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#include "components/BookOrbitGridLayout.h"
 #include "components/CompactHeader.h"
 #include "components/HeaderDate.h"
 #include "components/OptionPopup.h"
@@ -1996,6 +1997,40 @@ void BookOrbitCatalogBrowserActivity::render(RenderLock&&) {
                           downloadTotal);
     }
     const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    renderer.displayBuffer();
+    return;
+  }
+
+  // CrossInk Home: render remote book listings as a compact, paged grid on the
+  // button-driven X4 Pro. Facets and root sections retain the original list.
+  // Thumbnail decoding is a separate milestone; these are title cards for now.
+  if (navLevel == NavLevel::Books && !mappedInput.hasTouchHardware() && !entries.empty() && !listOptions) {
+    bookorbit_grid::Layout grid;
+    grid.columns = 3;
+    grid.top = 52;
+    grid.bottom = 42;
+    grid.titleHeight = 36;
+    const int perPage = bookorbit_grid::pageSize(pageWidth, pageHeight, grid);
+    visibleRows = perPage;
+    const int start = bookorbit_grid::pageStart(selectorIndex, pageWidth, pageHeight, grid);
+    for (int i = 0; i < perPage; ++i) {
+      const int absolute = start + i;
+      const Entry* entry = entryAt(absolute);
+      if (!entry) continue;
+      const auto cell = bookorbit_grid::cell(i, pageWidth, grid);
+      const bool selected = absolute == selectorIndex;
+      renderer.drawRect(cell.x, cell.y, cell.width, cell.height);
+      if (selected) renderer.drawRect(cell.x + 2, cell.y + 2, cell.width - 4, cell.height - 4);
+      const int coverHeight = bookorbit_grid::coverHeight(pageWidth, grid);
+      renderer.drawText(SMALL_FONT_ID, cell.x + 8, cell.y + coverHeight / 2, "BOOK");
+      // Avoid writing beyond the card's width: truncate on characters and then
+      // measure, since book titles often contain multibyte UTF-8 characters.
+      std::string label = entry->title;
+      while (!label.empty() && renderer.getTextWidth(SMALL_FONT_ID, label.c_str()) > cell.width - 8) label.pop_back();
+      renderer.drawText(SMALL_FONT_ID, cell.x + 4, cell.y + coverHeight + 5, label.c_str());
+    }
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OPEN), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;
