@@ -1,5 +1,9 @@
-on:
-  push:
-    branches: [main, crossink-home]
-  pull_request:
-  workflow_dispatch:
+git show HEAD~1:.github/workflows/ci.yml > .github/workflows/ci.yml
+
+sed -i 's/branches: \[main\]/branches: [main, crossink-home]/' .github/workflows/ci.yml
+
+sed -i '/^  pull_request:/a\  workflow_dispatch:' .github/workflows/ci.yml
+
+git add .github/workflows/ci.yml &&
+git commit -m "Restore CI jobs and enable CrossInk Home builds" &&
+git push origin crossink-home
