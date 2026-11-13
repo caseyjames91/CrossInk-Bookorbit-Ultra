@@ -1,9 +1,245 @@
-git show HEAD~1:.github/workflows/ci.yml > .github/workflows/ci.yml
+name: CI (build)
 
-sed -i 's/branches: \[main\]/branches: [main, crossink-home]/' .github/workflows/ci.yml
+on:
+  push:
+    branches: [main, crossink-home]
+  pull_request:
+  workflow_dispatch:
 
-sed -i '/^  pull_request:/a\  workflow_dispatch:' .github/workflows/ci.yml
+# A newer commit supersedes older PR validation; keep main pushes independent.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-git add .github/workflows/ci.yml &&
-git commit -m "Restore CI jobs and enable CrossInk Home builds" &&
-git push origin crossink-home
+permissions:
+  contents: read
+
+jobs:
+  clang-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install clang-format-21
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 21
+          sudo apt-get update
+          sudo apt-get install -y clang-format-21
+
+      - name: Run clang-format
+        run: |
+          PATH="/usr/lib/llvm-21/bin:$PATH" ./bin/clang-format-fix
+          git diff --exit-code || (echo "Please run 'bin/clang-format-fix' to fix formatting issues" && exit 1)
+
+  cppcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          # Do not cache PlatformIO's Python virtual environment. It is tied to
+          # the runner's Python and can become invalid when restored elsewhere.
+          path: |
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-platformio-py3.14-core6.1.19-${{ hashFiles('platformio.ini', 'platformio.local.example.ini') }}
+
+      - name: Install PlatformIO Core
+        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+
+      - name: Run cppcheck
+        run: pio check --fail-on-defect low --fail-on-defect medium --fail-on-defect high
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [default, x4-pro, x4-classic, sticky]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          # Do not cache PlatformIO's Python virtual environment. It is tied to
+          # the runner's Python and can become invalid when restored elsewhere.
+          path: |
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-platformio-py3.14-core6.1.19-${{ matrix.environment }}-${{ hashFiles('platformio.ini', 'platformio.local.example.ini') }}
+
+      - name: Install PlatformIO Core
+        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+
+      - name: Build ${{ matrix.environment }} firmware
+        run: |
+          set -euo pipefail
+          pio run -j1 -e ${{ matrix.environment }} | tee pio-${{ matrix.environment }}.log
+
+      - name: Extract firmware stats
+        run: |
+          set -euo pipefail
+          {
+            echo "## ${{ matrix.environment }} firmware build stats"
+            grep -E "RAM:\s|Flash:\s" pio-${{ matrix.environment }}.log | while read -r line; do echo "- ${line}"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload firmware artifacts
+        if: matrix.environment == 'default'
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-x3-x4
+          path: |
+            .pio/build/default/firmware-x3-x4.bin
+          if-no-files-found: error
+
+      - name: Upload X4 Pro firmware artifact
+        if: matrix.environment == 'x4-pro'
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-x4-pro
+          path: .pio/build/x4-pro/firmware-x4-pro.bin
+          if-no-files-found: error
+
+      - name: Upload X4 Classic firmware artifact
+        if: matrix.environment == 'x4-classic'
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-x4-classic
+          path: .pio/build/x4-classic/firmware-x4-classic.bin
+          if-no-files-found: error
+
+  integration:
+    name: BookOrbit integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          # Do not cache PlatformIO's Python virtual environment. It is tied to
+          # the runner's Python and can become invalid when restored elsewhere.
+          path: |
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: ${{ runner.os }}-platformio-py3.14-core6.1.19-simulator-${{ hashFiles('platformio.ini', 'platformio.local.example.ini') }}
+
+      - name: Install PlatformIO Core
+        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+
+      - name: Install SDL2 and OpenSSL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libssl-dev
+
+      - name: Apply the simulator cold-build overrides
+        # The fetched simulator package needs an include-path fix (see the
+        # example file) and a few HAL shims it does not carry yet.
+        run: |
+          cp platformio.local.example.ini platformio.local.ini
+          pio pkg install -e simulator
+          python3 test/integration/ci/patch_simulator_package.py
+
+      - name: Build the simulator
+        # Two things platformio.ini leaves to macOS. On Linux the simulator
+        # package computes MD5 with OpenSSL (CommonCrypto on macOS), which has to
+        # be linked. And GNU ld pulls in the package's firmware_link_stubs.o,
+        # whose MySerialImpl and uzlib checksum definitions repeat the ones
+        # lib/Logging and lib/uzlib already carry; the macOS linker never loads
+        # that object. The bodies are the same, so either copy will do.
+        # PlatformIO appends this variable to the environment's build_flags.
+        env:
+          PLATFORMIO_BUILD_FLAGS: -lcrypto -Wl,--allow-multiple-definition
+        run: pio run -e simulator
+
+      - name: Start the BookOrbit server
+        # The book dock is a bind mount: the seeder fills it from the host and
+        # the server, running as its own user, empties it. Left to Docker, the
+        # folder would be created owned by root and closed to both.
+        run: |
+          mkdir -p test/integration/library-dock
+          chmod a+rwx test/integration/library-dock
+          docker compose -f test/integration/docker-compose.yml up -d --wait
+
+      - name: Seed the server
+        run: |
+          python3 test/integration/seed/make_library.py
+          python3 test/integration/seed/seed.py
+
+      - name: Run the scenarios
+        run: python3 test/integration/harness/run_scenarios.py
+
+      - name: Dump server logs on failure
+        if: failure()
+        run: docker compose -f test/integration/docker-compose.yml logs --tail 300
+
+      - name: Stop the server
+        if: always()
+        run: docker compose -f test/integration/docker-compose.yml down -v
+
+  # This job is used as the PR required actions check, allows for changes to other steps in the future without breaking
+  # PR requirements.
+  test-status:
+    name: Test Status
+    needs:
+      - build
+      - clang-format
+      - cppcheck
+      - integration
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail because needed jobs failed
+        # Fail if any job failed or was cancelled (skipped jobs are ok)
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: exit 1
+      - name: Success
+        run: exit 0
